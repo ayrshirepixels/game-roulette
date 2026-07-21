@@ -1,0 +1,11 @@
+{
+  "name": "Game Roulette",
+  "author": "Ayrshire Pixels",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["library", "fun", "utility"],
+    "description": "Spin a slot-machine reel of your library capsules and let fate pick what you play next. Filter by installed, playtime and backlog, weight toward neglected games, and roll-and-launch in one tap.",
+    "image": "https://raw.githubusercontent.com/ayrshirepixels/game-roulette/main/assets/thumbnail.png"
+  }
+}

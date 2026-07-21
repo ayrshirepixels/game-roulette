@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
     installedOnly: true,
     playtimeBucket: "all",
     deckCompat: "any",
+    includeNonSteam: false,
     oneSitting: false,
     oneSittingHours: 3,
     avoidRecent: true,
@@ -57,11 +58,15 @@ const getHltb = callable("get_hltb");
 const COMPAT_PLAYABLE = 2;
 const COMPAT_VERIFIED = 3;
 const APP_TYPE_GAME = 1; // EAppType.Game
+const APP_TYPE_SHORTCUT = 1073741824; // EAppType.Shortcut (non-Steam games)
 function overviewToGame(app) {
     if (!app)
         return null;
     const type = Number(app.app_type ?? 0);
-    if (type !== 0 && (type & APP_TYPE_GAME) === 0)
+    const isGame = (type & APP_TYPE_GAME) !== 0;
+    const isShortcut = type === APP_TYPE_SHORTCUT;
+    // Only real games and non-Steam shortcuts; skip tools, DLC, videos, etc.
+    if (type !== 0 && !isGame && !isShortcut)
         return null;
     const appid = Number(app.appid);
     if (!Number.isFinite(appid))
@@ -70,8 +75,10 @@ function overviewToGame(app) {
         appid,
         name: String(app.display_name ?? "Unknown"),
         minutes: Number(app.minutes_playtime_forever ?? 0) || 0,
-        installed: Boolean(app.installed),
+        // Shortcuts point at a local executable — treat them as always installed.
+        installed: isShortcut ? true : Boolean(app.installed),
         compat: Number(app.steam_deck_compat_category ?? 0) || 0,
+        nonSteam: isShortcut,
     };
 }
 function readLibrary() {
@@ -118,7 +125,7 @@ function viewInLibrary(appid) {
         toaster.toast({ title: "Game Roulette", body: "Couldn't open that game's page." });
     }
 }
-const VERSION = "1.0.0";
+const VERSION = "1.0.2";
 const GITHUB_URL = "https://github.com/ayrshirepixels/game-roulette";
 function openExternal(url) {
     try {
@@ -191,6 +198,12 @@ function pulseHaptic() {
 /* ------------------------------------------------------------------ */
 function applyFilters(all, s) {
     let pool = all;
+    // Non-Steam shortcuts: opt-in, and dropped whenever a data-dependent filter
+    // is active (they have no real Steam playtime or Deck-compat rating).
+    const dataFilterActive = s.playtimeBucket !== "all" || s.deckCompat !== "any";
+    if (!s.includeNonSteam || dataFilterActive) {
+        pool = pool.filter((g) => !g.nonSteam);
+    }
     if (s.installedOnly)
         pool = pool.filter((g) => g.installed);
     switch (s.playtimeBucket) {
@@ -252,8 +265,11 @@ const STRIP_LEN = 30;
 const WINNER_INDEX = STRIP_LEN - 3;
 const SPIN_MS = 3200;
 function Capsule({ game, highlight }) {
-    const [src, setSrc] = SP_REACT.useState(capsuleUrl(game.appid));
-    const [fellBack, setFellBack] = SP_REACT.useState(false);
+    // Try vertical capsule, then header, then a name-on-tile placeholder. Non-Steam
+    // shortcuts usually have no cached capsule art, so they land on the placeholder.
+    const sources = [capsuleUrl(game.appid), headerUrl(game.appid)];
+    const [srcIdx, setSrcIdx] = SP_REACT.useState(0);
+    const exhausted = srcIdx >= sources.length;
     return (SP_JSX.jsx("div", { style: {
             width: ITEM_W,
             height: ITEM_H,
@@ -266,12 +282,18 @@ function Capsule({ game, highlight }) {
                 ? "0 0 0 2px #ffd24a, 0 0 14px rgba(255, 210, 74, 0.55)"
                 : "0 1px 3px rgba(0,0,0,0.5)",
             transition: "box-shadow 180ms ease",
-        }, children: SP_JSX.jsx("img", { src: src, alt: game.name, onError: () => {
-                if (!fellBack) {
-                    setFellBack(true);
-                    setSrc(headerUrl(game.appid));
-                }
-            }, style: { width: "100%", height: "100%", objectFit: "cover", display: "block" } }) }));
+        }, children: exhausted ? (SP_JSX.jsxs("div", { style: {
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "8px 6px",
+                boxSizing: "border-box",
+                textAlign: "center",
+                background: "linear-gradient(160deg, #232a38 0%, #161b25 100%)",
+            }, children: [SP_JSX.jsx("span", { style: { fontSize: 11, fontWeight: 600, color: "#cfd6e2", lineHeight: 1.25, overflow: "hidden" }, children: game.name }), game.nonSteam && (SP_JSX.jsx("span", { style: { fontSize: 8, letterSpacing: "0.5px", color: "#7a8598", marginTop: 6, textTransform: "uppercase" }, children: "Non-Steam" }))] })) : (SP_JSX.jsx("img", { src: sources[srcIdx], alt: game.name, onError: () => setSrcIdx((i) => i + 1), style: { width: "100%", height: "100%", objectFit: "cover", display: "block" } })) }));
 }
 /* ------------------------------------------------------------------ */
 /* Recent rolls (collapsible)                                          */
@@ -487,7 +509,7 @@ function Content() {
                                 { data: "any", label: "Any" },
                                 { data: "playable", label: "Playable or better" },
                                 { data: "verified", label: "Verified only" },
-                            ], selectedOption: settings.deckCompat, onChange: (o) => update("deckCompat", o.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "One-sitting only", description: `Only games with a HowLongToBeat main story under ${settings.oneSittingHours} hours.`, checked: settings.oneSitting, onChange: (v) => update("oneSitting", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Weight toward neglected", description: "Rarely-played games land more often.", checked: settings.weightNeglected, onChange: (v) => update("weightNeglected", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Avoid recent rolls", description: "Skip the last few games it landed on.", checked: settings.avoidRecent, onChange: (v) => update("avoidRecent", v) }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Feel", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Sound on land", checked: settings.sound, onChange: (v) => update("sound", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Haptics on land", checked: settings.haptics, onChange: (v) => update("haptics", v) }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: "About", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.Focusable, { style: { display: "flex", alignItems: "center", gap: 10, padding: "2px 2px 8px" }, children: [SP_JSX.jsx(WheelIcon, { style: { fontSize: 30, flex: "0 0 auto", color: "#e6ebf2" } }), SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", lineHeight: 1.25 }, children: [SP_JSX.jsx("span", { style: { fontWeight: 700, fontSize: 14, color: "#e6ebf2" }, children: "Ayrshire Pixels" }), SP_JSX.jsxs("span", { style: { fontSize: 11, color: "#8b95a7" }, children: ["Game Roulette v", VERSION] })] })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => openExternal(GITHUB_URL), children: "View on GitHub" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 10, color: "#5a6473", textAlign: "center", width: "100%", padding: "2px 0 4px" }, children: "Made in Irvine, Ayrshire \uD83C\uDFF4\uDB40\uDC67\uDB40\uDC62\uDB40\uDC73\uDB40\uDC63\uDB40\uDC74\uDB40\uDC7F" }) })] })] }));
+                            ], selectedOption: settings.deckCompat, onChange: (o) => update("deckCompat", o.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Include non-Steam games", description: "Shortcuts are dropped when a playtime or Deck-compat filter is on (they have no such data).", checked: settings.includeNonSteam, onChange: (v) => update("includeNonSteam", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "One-sitting only", description: `Only games with a HowLongToBeat main story under ${settings.oneSittingHours} hours.`, checked: settings.oneSitting, onChange: (v) => update("oneSitting", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Weight toward neglected", description: "Rarely-played games land more often.", checked: settings.weightNeglected, onChange: (v) => update("weightNeglected", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Avoid recent rolls", description: "Skip the last few games it landed on.", checked: settings.avoidRecent, onChange: (v) => update("avoidRecent", v) }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Feel", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Sound on land", checked: settings.sound, onChange: (v) => update("sound", v) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Haptics on land", checked: settings.haptics, onChange: (v) => update("haptics", v) }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: "About", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.Focusable, { style: { display: "flex", alignItems: "center", gap: 10, padding: "2px 2px 8px" }, children: [SP_JSX.jsx(WheelIcon, { style: { fontSize: 30, flex: "0 0 auto", color: "#e6ebf2" } }), SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", lineHeight: 1.25 }, children: [SP_JSX.jsx("span", { style: { fontWeight: 700, fontSize: 14, color: "#e6ebf2" }, children: "Ayrshire Pixels" }), SP_JSX.jsxs("span", { style: { fontSize: 11, color: "#8b95a7" }, children: ["Game Roulette v", VERSION] })] })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => openExternal(GITHUB_URL), children: "View on GitHub" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 10, color: "#5a6473", textAlign: "center", width: "100%", padding: "2px 0 4px" }, children: "Made in Irvine, Ayrshire \uD83C\uDFF4\uDB40\uDC67\uDB40\uDC62\uDB40\uDC73\uDB40\uDC63\uDB40\uDC74\uDB40\uDC7F" }) })] })] }));
 }
 class Boundary extends SP_REACT.Component {
     constructor() {

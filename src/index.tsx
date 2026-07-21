@@ -20,6 +20,7 @@ interface Settings {
   installedOnly: boolean;
   playtimeBucket: "all" | "unplayed" | "under2h" | "under10h";
   deckCompat: "any" | "playable" | "verified";
+  includeNonSteam: boolean;
   oneSitting: boolean;
   oneSittingHours: number;
   avoidRecent: boolean;
@@ -33,6 +34,7 @@ const DEFAULT_SETTINGS: Settings = {
   installedOnly: true,
   playtimeBucket: "all",
   deckCompat: "any",
+  includeNonSteam: false,
   oneSitting: false,
   oneSittingHours: 3,
   avoidRecent: true,
@@ -59,6 +61,7 @@ const getHltb = callable<[string], number | null>("get_hltb");
 const COMPAT_PLAYABLE = 2;
 const COMPAT_VERIFIED = 3;
 const APP_TYPE_GAME = 1; // EAppType.Game
+const APP_TYPE_SHORTCUT = 1073741824; // EAppType.Shortcut (non-Steam games)
 
 interface Game {
   appid: number;
@@ -66,20 +69,28 @@ interface Game {
   minutes: number;
   installed: boolean;
   compat: number;
+  nonSteam: boolean;
 }
 
 function overviewToGame(app: any): Game | null {
   if (!app) return null;
   const type = Number(app.app_type ?? 0);
-  if (type !== 0 && (type & APP_TYPE_GAME) === 0) return null;
+  const isGame = (type & APP_TYPE_GAME) !== 0;
+  const isShortcut = type === APP_TYPE_SHORTCUT;
+  // Only real games and non-Steam shortcuts; skip tools, DLC, videos, etc.
+  if (type !== 0 && !isGame && !isShortcut) return null;
+
   const appid = Number(app.appid);
   if (!Number.isFinite(appid)) return null;
+
   return {
     appid,
     name: String(app.display_name ?? "Unknown"),
     minutes: Number(app.minutes_playtime_forever ?? 0) || 0,
-    installed: Boolean(app.installed),
+    // Shortcuts point at a local executable — treat them as always installed.
+    installed: isShortcut ? true : Boolean(app.installed),
     compat: Number(app.steam_deck_compat_category ?? 0) || 0,
+    nonSteam: isShortcut,
   };
 }
 
@@ -129,7 +140,7 @@ function viewInLibrary(appid: number): void {
   }
 }
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.2";
 const GITHUB_URL = "https://github.com/ayrshirepixels/game-roulette";
 
 function openExternal(url: string): void {
@@ -204,6 +215,14 @@ function pulseHaptic(): void {
 
 function applyFilters(all: Game[], s: Settings): Game[] {
   let pool = all;
+
+  // Non-Steam shortcuts: opt-in, and dropped whenever a data-dependent filter
+  // is active (they have no real Steam playtime or Deck-compat rating).
+  const dataFilterActive = s.playtimeBucket !== "all" || s.deckCompat !== "any";
+  if (!s.includeNonSteam || dataFilterActive) {
+    pool = pool.filter((g) => !g.nonSteam);
+  }
+
   if (s.installedOnly) pool = pool.filter((g) => g.installed);
 
   switch (s.playtimeBucket) {
@@ -265,8 +284,12 @@ const WINNER_INDEX = STRIP_LEN - 3;
 const SPIN_MS = 3200;
 
 function Capsule({ game, highlight }: { game: Game; highlight: boolean }) {
-  const [src, setSrc] = useState(capsuleUrl(game.appid));
-  const [fellBack, setFellBack] = useState(false);
+  // Try vertical capsule, then header, then a name-on-tile placeholder. Non-Steam
+  // shortcuts usually have no cached capsule art, so they land on the placeholder.
+  const sources = [capsuleUrl(game.appid), headerUrl(game.appid)];
+  const [srcIdx, setSrcIdx] = useState(0);
+  const exhausted = srcIdx >= sources.length;
+
   return (
     <div
       style={{
@@ -283,17 +306,38 @@ function Capsule({ game, highlight }: { game: Game; highlight: boolean }) {
         transition: "box-shadow 180ms ease",
       }}
     >
-      <img
-        src={src}
-        alt={game.name}
-        onError={() => {
-          if (!fellBack) {
-            setFellBack(true);
-            setSrc(headerUrl(game.appid));
-          }
-        }}
-        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-      />
+      {exhausted ? (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "8px 6px",
+            boxSizing: "border-box",
+            textAlign: "center",
+            background: "linear-gradient(160deg, #232a38 0%, #161b25 100%)",
+          }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#cfd6e2", lineHeight: 1.25, overflow: "hidden" }}>
+            {game.name}
+          </span>
+          {game.nonSteam && (
+            <span style={{ fontSize: 8, letterSpacing: "0.5px", color: "#7a8598", marginTop: 6, textTransform: "uppercase" }}>
+              Non-Steam
+            </span>
+          )}
+        </div>
+      ) : (
+        <img
+          src={sources[srcIdx]}
+          alt={game.name}
+          onError={() => setSrcIdx((i) => i + 1)}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
+      )}
     </div>
   );
 }
@@ -638,6 +682,14 @@ function Content() {
             ]}
             selectedOption={settings.deckCompat}
             onChange={(o) => update("deckCompat", o.data as Settings["deckCompat"])}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Include non-Steam games"
+            description="Shortcuts are dropped when a playtime or Deck-compat filter is on (they have no such data)."
+            checked={settings.includeNonSteam}
+            onChange={(v) => update("includeNonSteam", v)}
           />
         </PanelSectionRow>
         <PanelSectionRow>

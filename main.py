@@ -10,6 +10,7 @@ DEFAULT_SETTINGS = {
     "installedOnly": True,
     "playtimeBucket": "all",        # all | unplayed | under2h | under10h
     "deckCompat": "any",            # any | playable | verified
+    "includeNonSteam": False,       # include non-Steam shortcuts
     "oneSitting": False,            # HLTB main story <= oneSittingHours
     "oneSittingHours": 3,
     "avoidRecent": True,

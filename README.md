@@ -1,6 +1,10 @@
-# game-roulette
- Decky Loader plugin for the Steam Deck. Spins a slot-machine reel of your library capsules and lands on something to play, so you stop staring at 300 games and just *pick one*.
+# Game Roulette
 
+A Decky Loader plugin for the Steam Deck. Spins a slot-machine reel of your
+library capsules and lands on something to play, so you stop staring at 300
+games and just *pick one*.
+
+![screenshot placeholder](assets/thumbnail.png)
 
 ## What it does
 
@@ -61,6 +65,10 @@ crash. If a Steam update ever empties the pool, the field names in
   of spinning.
 - Backend settings live in Decky's per-plugin settings directory as
   `settings.json`.
+
+## Credits
+
+Built by **Ayrshire Pixels**.
 
 ## License
 
